@@ -65,6 +65,7 @@ import com.linecorp.armeria.server.tracing.HttpTracingService;
 import com.linecorp.armeria.testing.server.ServerRule;
 
 import brave.Tracing;
+import brave.http.HttpTracing;
 import brave.propagation.CurrentTraceContext;
 import brave.sampler.Sampler;
 import zipkin2.Span;
@@ -162,7 +163,7 @@ public class HttpTracingIntegrationTest {
                 .build(HelloService.Iface.class);
         zipClient = new ClientBuilder(server.uri(BINARY, "/zip"))
                 .decorator(HttpRequest.class, HttpResponse.class,
-                        HttpTracingClient.newDecorator(newTracing("client/zip")))
+                           HttpTracingClient.newDecorator(newTracing("client/zip")))
                 .build(HelloService.Iface.class);
         fooClientWithoutTracing = Clients.newClient(server.uri(BINARY, "/foo"), HelloService.Iface.class);
         barClient = newClient("/bar");

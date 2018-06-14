@@ -93,11 +93,8 @@ public class HttpTracingClientTest {
 
         // check tags
         assertThat(span.tags()).containsAllEntriesOf(ImmutableMap.of(
-                "http.host", "foo.com",
                 "http.method", "POST",
-                "http.path", "/hello/armeria",
-                "http.status_code", "200",
-                "http.url", "none+h2c://foo.com/hello/armeria"));
+                "http.path", "/hello/armeria"));
 
         // check service name
         assertThat(span.localServiceName()).isEqualTo(TEST_SERVICE);
@@ -122,11 +119,8 @@ public class HttpTracingClientTest {
 
         // check tags
         assertThat(span.tags()).containsAllEntriesOf(ImmutableMap.of(
-                "http.host", "foo.com",
                 "http.method", "POST",
-                "http.path", "/hello/armeria",
-                "http.status_code", "200",
-                "http.url", "none+h2c://foo.com/hello/armeria"));
+                "http.path", "/hello/armeria"));
 
         // check service name
         assertThat(span.localServiceName()).isEqualTo(TEST_SERVICE);

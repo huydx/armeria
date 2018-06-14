@@ -161,6 +161,7 @@ io.zipkin.brave:
     version: &BRAVE_VERSION '5.0.0'
     javadocs:
     - https://static.javadoc.io/io.zipkin.brave/brave/5.0.0/
+  brave-instrumentation-http: { version: *BRAVE_VERSION }
 
 it.unimi.dsi:
   fastutil:

@@ -46,6 +46,7 @@ import com.linecorp.armeria.server.Service;
 import com.linecorp.armeria.server.ServiceRequestContext;
 
 import brave.Tracing;
+import brave.http.HttpTracing;
 import brave.sampler.Sampler;
 import io.netty.channel.Channel;
 import zipkin2.Span;
@@ -78,9 +79,7 @@ public class HttpTracingServiceTest {
         assertThat(span.tags()).containsAllEntriesOf(ImmutableMap.of(
                 "http.host", "foo.com",
                 "http.method", "POST",
-                "http.path", "/hello/trustin",
-                "http.status_code", "200",
-                "http.url", "none+h2c://foo.com/hello/trustin"));
+                "http.path", "/hello/trustin"));
 
         // check service name
         assertThat(span.localServiceName()).isEqualTo(TEST_SERVICE);

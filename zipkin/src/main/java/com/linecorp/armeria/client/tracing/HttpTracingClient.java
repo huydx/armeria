@@ -26,22 +26,30 @@ import javax.annotation.Nullable;
 import com.linecorp.armeria.client.Client;
 import com.linecorp.armeria.client.ClientRequestContext;
 import com.linecorp.armeria.client.SimpleDecoratingClient;
-import com.linecorp.armeria.common.HttpHeaders;
 import com.linecorp.armeria.common.HttpRequest;
 import com.linecorp.armeria.common.HttpResponse;
+import com.linecorp.armeria.common.RpcRequest;
 import com.linecorp.armeria.common.logging.RequestLog;
 import com.linecorp.armeria.common.logging.RequestLogAvailability;
 import com.linecorp.armeria.internal.tracing.AsciiStringKeyFactory;
-import com.linecorp.armeria.internal.tracing.SpanContextUtil;
+import com.linecorp.armeria.internal.tracing.TracingRequest;
+import com.linecorp.armeria.internal.tracing.TracingResponse;
 
 import brave.Span;
 import brave.Span.Kind;
 import brave.Tracer;
 import brave.Tracer.SpanInScope;
 import brave.Tracing;
+import brave.http.HttpAdapter;
+import brave.http.HttpClientAdapter;
+import brave.http.HttpClientHandler;
+import brave.http.HttpClientParser;
+import brave.http.HttpTracing;
 import brave.propagation.TraceContext;
+import io.netty.util.AsciiString;
 import io.netty.util.concurrent.FastThreadLocal;
 import zipkin2.Endpoint;
+import zipkin2.Endpoint.Builder;
 
 /**
  * Decorates a {@link Client} to trace outbound {@link HttpRequest}s using
@@ -53,6 +61,44 @@ import zipkin2.Endpoint;
 public class HttpTracingClient extends SimpleDecoratingClient<HttpRequest, HttpResponse> {
 
     private static final FastThreadLocal<SpanInScope> SPAN_IN_THREAD = new FastThreadLocal<>();
+
+    private static final class ClientAdapter extends HttpClientAdapter<TracingRequest, TracingResponse> {
+
+        @Override
+        public String method(TracingRequest request) {
+            return request.httpRequest().method().name();
+        }
+
+        @Override
+        public String url(TracingRequest request) {
+            final RequestLog log = request.requestLog();
+            final StringBuilder uriBuilder = new StringBuilder()
+                    .append(log.scheme().uriText())
+                    .append("://")
+                    .append(log.authority())
+                    .append(log.path());
+            if (log.query() != null) {
+                uriBuilder.append('?').append(log.query());
+            }
+            return uriBuilder.append('?').append(log.query()).toString();
+        }
+
+        @Override
+        public String requestHeader(TracingRequest request, String name) {
+            return request.httpRequest().headers().get(AsciiString.of(name));
+        }
+
+        @Override
+        public Integer statusCode(TracingResponse response) {
+            return response.requestLog().status().code();
+        }
+
+        @Override
+        public boolean parseServerAddress(TracingRequest tracingRequest, Builder builder) {
+            //TBD
+            return true;
+        }
+    }
 
     /**
      * Creates a new tracing {@link Client} decorator using the specified {@link Tracing} instance.
@@ -72,9 +118,23 @@ public class HttpTracingClient extends SimpleDecoratingClient<HttpRequest, HttpR
     }
 
     private final Tracer tracer;
-    private final TraceContext.Injector<HttpHeaders> injector;
+    private final TraceContext.Injector<TracingRequest> injector;
     @Nullable
     private final String remoteServiceName;
+    private final HttpClientHandler<TracingRequest, TracingResponse> httpClientHandler;
+
+    private final static class ClientParser extends HttpClientParser {
+        @Override
+        protected <Req> String spanName(HttpAdapter<Req, ?> adapter, Req req) {
+            TracingRequest tr = (TracingRequest) req;
+            Object requestContent = tr.requestLog().requestContent();
+            if (requestContent instanceof RpcRequest) {
+                return ((RpcRequest) requestContent).method();
+            } else {
+                return super.spanName(adapter, req);
+            }
+        }
+    }
 
     /**
      * Creates a new instance.
@@ -82,40 +142,35 @@ public class HttpTracingClient extends SimpleDecoratingClient<HttpRequest, HttpR
     protected HttpTracingClient(Client<HttpRequest, HttpResponse> delegate, Tracing tracing,
                                 @Nullable String remoteServiceName) {
         super(delegate);
+        HttpTracing httpTracing = HttpTracing.newBuilder(tracing)
+                                             .clientParser(new ClientParser()).build();
         tracer = tracing.tracer();
         injector = tracing.propagationFactory().create(AsciiStringKeyFactory.INSTANCE)
-                          .injector(HttpHeaders::set);
+                          .injector((req, key, value) -> req.httpRequest().headers().set(key, value));
+        httpClientHandler = HttpClientHandler.create(httpTracing, new ClientAdapter());
         this.remoteServiceName = remoteServiceName;
     }
 
     @Override
-    public HttpResponse execute(ClientRequestContext ctx, HttpRequest req) throws Exception {
-        final Span span = tracer.nextSpan();
-        injector.inject(span.context(), req.headers());
-        // For no-op spans, we only need to inject into headers and don't set any other attributes.
+    public HttpResponse execute(ClientRequestContext ctx, HttpRequest request) throws Exception {
+        TracingRequest req = new TracingRequest(ctx.log(), request);
+        final Span span = httpClientHandler.handleSend(injector, req);
+        setRemoteEndpoint(span, ctx.log());
         if (span.isNoop()) {
-            return delegate().execute(ctx, req);
+            return delegate().execute(ctx, request);
         }
-
-        final String method = ctx.method().name();
-        span.kind(Kind.CLIENT).name(method).start();
-
-        SpanContextUtil.setupContext(SPAN_IN_THREAD, ctx, span, tracer);
-
-        ctx.log().addListener(log -> finishSpan(span, log), RequestLogAvailability.COMPLETE);
-
-        try (SpanInScope ignored = tracer.withSpanInScope(span)) {
-            return delegate().execute(ctx, req);
-        }
-    }
-
-    private void finishSpan(Span span, RequestLog log) {
-        setRemoteEndpoint(span, log);
-        SpanContextUtil.closeSpan(span, log);
+        span.kind(Kind.CLIENT).start();
+        SPAN_IN_THREAD.set(tracer.withSpanInScope(span));
+        ctx.log().addListener(log -> {
+            final SpanInScope spanInScope = SPAN_IN_THREAD.get();
+            httpClientHandler.handleReceive(new TracingResponse(log),
+                                            log.responseCause(), span);
+            spanInScope.close();
+        }, RequestLogAvailability.COMPLETE);
+        return delegate().execute(ctx, request);
     }
 
     private void setRemoteEndpoint(Span span, RequestLog log) {
-
         final SocketAddress remoteAddress = log.context().remoteAddress();
         final InetAddress address;
         if (remoteAddress instanceof InetSocketAddress) {

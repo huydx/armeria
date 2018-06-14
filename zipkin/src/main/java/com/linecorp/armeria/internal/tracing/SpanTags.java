@@ -29,28 +29,12 @@ import brave.Span;
 public final class SpanTags {
 
     /**
-     * Adds information about the raw HTTP request, RPC request, and endpoint to the span.
+     * Add Armeria specific naming and tagging.
      */
-    public static void addTags(Span span, RequestLog log) {
+    public static void customTag(Span span, RequestLog log) {
         final String host = log.requestHeaders().authority();
         assert host != null;
         span.tag("http.host", host);
-        final StringBuilder uriBuilder = new StringBuilder()
-                .append(log.scheme().uriText())
-                .append("://")
-                .append(host)
-                .append(log.path());
-        if (log.query() != null) {
-            uriBuilder.append('?').append(log.query());
-        }
-        span.tag("http.method", log.method().name())
-            .tag("http.path", log.path())
-            .tag("http.url", uriBuilder.toString())
-            .tag("http.status_code", log.status().codeAsText());
-        final Throwable responseCause = log.responseCause();
-        if (responseCause != null) {
-            span.tag("error", responseCause.toString());
-        }
 
         final SocketAddress raddr = log.context().remoteAddress();
         if (raddr != null) {
@@ -59,11 +43,6 @@ public final class SpanTags {
         final SocketAddress laddr = log.context().localAddress();
         if (laddr != null) {
             span.tag("address.local", laddr.toString());
-        }
-
-        final Object requestContent = log.requestContent();
-        if (requestContent instanceof RpcRequest) {
-            span.name(((RpcRequest) requestContent).method());
         }
     }
 
